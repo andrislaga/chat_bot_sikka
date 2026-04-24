@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Admin - SISKA BPS Sikka</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bps-blue   : #003366;
+            --bps-orange : #f26522;
+        }
+
+        body {
+            background-color: #f0f2f5;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        /* Navigation */
+        .navbar {
+            background: linear-gradient(90deg, var(--bps-blue), #005599);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+
+        .nav-pills .nav-link {
+            color: #555;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            padding: 6px 14px;
+        }
+
+        .nav-pills .nav-link.active {
+            background-color: var(--bps-blue);
+            color: white;
+        }
+
+        .nav-pills .nav-link:hover:not(.active) {
+            background-color: #e8eef5;
+        }
+
+        /* Cards & Stats */
+        .stat-card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            transition: transform 0.2s;
+        }
+
+        .stat-card:hover { 
+            transform: translateY(-2px); 
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 2px solid #f0f2f5;
+            font-weight: 600;
+            color: var(--bps-blue);
+            border-radius: 12px 12px 0 0 !important;
+            padding: 14px 20px;
+        }
+
+        /* Table & Badges */
+        .badge-pending   { background-color: #fff3cd; color: #856404; border: 1px solid #ffc107; }
+        .badge-responded { background-color: #d1e7dd; color: #0a3622; border: 1px solid #198754; }
+        
+        .table th { 
+            font-size: 0.8rem; 
+            text-transform: uppercase; 
+            color: #6c757d; 
+            letter-spacing: 0.5px; 
+        }
+
+        .table td { 
+            vertical-align: middle; 
+            font-size: 0.9rem; 
+        }
+
+        .unread-row {
+            box-shadow: inset 4px 0 0 #ffc107;
+        }
+
+        /* ════════════════════════════════════════════════════════
+           NOTIFIKASI — Indikator SSE & Toast
+        ════════════════════════════════════════════════════════ */
+
+        /* Dot status koneksi SSE di navbar */
+        #sse-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.6);
+            user-select: none;
+        }
+
+        #sse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #6c757d;
+            transition: background 0.4s;
+        }
+
+        #sse-dot.connected    { background: #28a745; box-shadow: 0 0 0 2px rgba(40,167,69,0.3); }
+        #sse-dot.disconnected { background: #dc3545; }
+        #sse-dot.connecting   { background: #ffc107; animation: pulse 1s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.3; }
+        }
+
+        /* Badge jumlah notif belum dilihat di navbar */
+        #notif-badge {
+            display: none;
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 10px;
+            background: #dc3545;
+            color: white;
+            font-weight: 700;
+            animation: bounce 0.4s ease;
+        }
+
+        @keyframes bounce {
+            0%   { transform: scale(0.7); }
+            60%  { transform: scale(1.15); }
+            100% { transform: scale(1); }
+        }
+
+        /* ── Toast Container ─────────────────────────────────── */
+        #toast-container {
+            position: fixed;
+            top: 70px;
+            right: 16px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-width: 340px;
+            pointer-events: none;
+        }
+
+        .siska-toast {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            border-left: 4px solid #28a745;
+            padding: 12px 14px;
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            pointer-events: all;
+            cursor: pointer;
+            animation: slideIn 0.3s ease;
+            transition: opacity 0.3s, transform 0.3s;
+        }
+
+        .siska-toast.new-conv {
+            border-left-color: var(--bps-orange);
+        }
+
+        .siska-toast:hover {
+            box-shadow: 0 6px 24px rgba(0,0,0,0.2);
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(60px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+
+        .siska-toast .toast-icon {
+            font-size: 1.4rem;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .siska-toast .toast-body { flex: 1; min-width: 0; }
+
+        .siska-toast .toast-title {
+            font-weight: 700;
+            font-size: 0.82rem;
+            color: var(--bps-blue);
+            margin-bottom: 2px;
+        }
+
+        .siska-toast .toast-phone {
+            font-size: 0.78rem;
+            color: #555;
+            font-weight: 600;
+        }
+
+        .siska-toast .toast-msg {
+            font-size: 0.76rem;
+            color: #777;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .siska-toast .toast-close {
+            font-size: 1rem;
+            color: #aaa;
+            cursor: pointer;
+            padding: 0 2px;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .siska-toast .toast-close:hover { color: #555; }
+
+        /* Highlight baris baru di tabel */
+        @keyframes highlightRow {
+            0%   { background-color: #fff3cd; }
+            100% { background-color: transparent; }
+        }
+
+        .row-highlight {
+            animation: highlightRow 3s ease forwards;
+        }
+
+        /* Banner new-message di atas tabel */
+        #new-msg-banner {
+            display: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════
+     NAVBAR
+════════════════════════════════════════════════════════════ -->
+<nav class="navbar navbar-dark mb-4 py-2">
+    <div class="container">
+        <a class="navbar-brand fw-bold" href="/admin">
+            📊 SISKA &nbsp;<span class="fw-light fs-6">Admin BPS Sikka</span>
+        </a>
+        <div class="d-flex align-items-center gap-3">
+            <!-- Status SSE + Badge notifikasi -->
+            <div id="sse-status">
+                <span id="sse-dot" class="connecting"></span>
+                <span id="sse-label">Menghubungkan...</span>
+                <span id="notif-badge">0</span>
+            </div>
+
+            <span class="text-white-50 small d-none d-md-inline">
+                <span id="clock"></span>
+            </span>
+            <a href="/logout" class="btn btn-sm btn-outline-light">Keluar</a>
+        </div>
+    </div>
+</nav>
+
+<!-- ════════════════════════════════════════════════════════════
+     TOAST CONTAINER (notifikasi pop-up in-page)
+════════════════════════════════════════════════════════════ -->
+<div id="toast-container"></div>
+
+<!-- ════════════════════════════════════════════════════════════
+     NAVIGASI
+════════════════════════════════════════════════════════════ -->
+<div class="container mb-4">
+    <ul class="nav nav-pills gap-1">
+        <li class="nav-item">
+            <a href="/admin" class="nav-link active">🏠 Antrean Agen</a>
+        </li>
+        <li class="nav-item">
+            <a href="/admin/services" class="nav-link">⚙️ Kelola Layanan</a>
+        </li>
+        <li class="nav-item">
+            <a href="/admin/publications" class="nav-link">📚 Lihat Publikasi</a>
+        </li>
+        <li class="nav-item">
+            <a href="/admin/logs" class="nav-link">💬 Log Chat</a>
+        </li>
+    </ul>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     STATISTIK SINGKAT
+════════════════════════════════════════════════════════════ -->
+<div class="container mb-4">
+    <div class="row g-3">
+        <div class="col-md-4">
+            <div class="card stat-card bg-primary text-white">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <p class="mb-1 opacity-75 small">Total User Unik</p>
+                            <h2 class="mb-0 fw-bold">{{ stats.total_users }}</h2>
+                        </div>
+                        <span style="font-size:2.2rem; opacity:0.6;">👥</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card stat-card bg-success text-white">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <p class="mb-1 opacity-75 small">Chat Hari Ini</p>
+                            <h2 class="mb-0 fw-bold">{{ stats.chats_today }}</h2>
+                        </div>
+                        <span style="font-size:2.2rem; opacity:0.6;">💬</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card stat-card">
+                <div class="card-body py-3">
+                    <p class="mb-2 text-muted small fw-semibold">🏆 TOP KATEGORI</p>
+                    {% if stats.top_intents %}
+                        {% for item in stats.top_intents %}
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="small">{{ item.intent | capitalize }}</span>
+                            <span class="badge bg-light text-dark border">{{ item.jumlah }} chat</span>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <p class="text-muted small mb-0">Belum ada data.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     TABEL PERCAKAPAN
+════════════════════════════════════════════════════════════ -->
+<div class="container mb-5">
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>💬 Percakapan</span>
+            <div class="d-flex gap-2 align-items-center">
+                <!-- Banner pesan baru -->
+                <div id="new-msg-banner" class="alert alert-warning py-1 px-3 mb-0 small fw-semibold"
+                     onclick="refreshConversations()" role="button">
+                    🔔 Ada pesan baru — klik untuk memuat ulang
+                </div>
+                <button class="btn btn-sm btn-outline-primary" onclick="window.location.reload()">🔄 Refresh</button>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle" id="conv-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:18%">No. HP</th>
+                            <th style="width:15%">Status</th>
+                            <th style="width:30%">Pesan Terakhir</th>
+                            <th style="width:17%">Update Terakhir</th>
+                            <th style="width:20%" class="text-center">Aksi</th>
+                        </tr>
+                    </thead>
+                    <tbody id="conv-tbody">
+                        {% if conversations %}
+                            {% for conv in conversations %}
+                            <tr class="{% if conv.unread_count > 0 %}table-warning fw-semibold unread-row{% endif %}"
+                                data-conv-id="{{ conv.conversation_id }}">
+                                <td>
+                                    {{ conv.phone }}
+                                    {% if conv.unread_count > 0 %}
+                                        <span class="badge bg-danger rounded-pill ms-1 unread-badge">{{ conv.unread_count }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if conv.status == 'pending' %}
+                                        <span class="badge bg-warning text-dark">⏳ Menunggu</span>
+                                    {% elif conv.status == 'in_progress' %}
+                                        <span class="badge bg-info text-dark">🔄 Proses</span>
+                                    {% elif conv.status == 'responded' %}
+                                        <span class="badge bg-success">✅ Direspon</span>
+                                    {% endif %}
+                                </td>
+                                <td style="max-width:250px">
+                                    <div class="d-flex flex-column gap-1">
+                                        <div class="text-truncate small">
+                                            <span class="text-primary fw-semibold">👤 User:</span>
+                                            <span class="text-dark">{{ conv.last_user_message | truncate(45) or '—' }}</span>
+                                        </div>
+                                        {% if conv.last_admin_reply %}
+                                        <div class="text-truncate small">
+                                            <span class="text-success fw-semibold">🧑‍💼 Admin:</span>
+                                            <span class="text-dark">{{ conv.last_admin_reply | truncate(45) }}</span>
+                                        </div>
+                                        {% else %}
+                                        <div class="text-truncate small text-muted">⏳ Belum dibalas</div>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td><small class="text-muted">{{ conv.last_update | wita }}</small></td>
+                                <td class="text-center">
+                                    <div class="d-flex gap-1 justify-content-center">
+                                        <a href="/admin/conversation/{{ conv.conversation_id }}" class="btn btn-sm btn-primary">💬 Lihat</a>
+                                        <form action="/admin/close/{{ conv.conversation_id }}" method="post" class="d-inline">
+                                            <button type="submit" class="btn btn-sm btn-secondary"
+                                                onclick="return confirm('Tutup percakapan ini? Pesan otomatis akan dikirim ke user.')">
+                                                ✖ Tutup
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr id="empty-row">
+                                <td colspan="5" class="text-center py-5 text-muted">
+                                    <span style="font-size:2rem">🎉</span><br>
+                                    <strong>Tidak ada percakapan aktif.</strong>
+                                </td>
+                            </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ════════════════════════════════════════════════════════════════
+//  JAM REAL-TIME
+// ════════════════════════════════════════════════════════════════
+function updateClock() {
+    const el = document.getElementById('clock');
+    if (el) {
+        el.textContent = new Date().toLocaleString('id-ID', {
+            timeZone: 'Asia/Makassar', dateStyle: 'medium', timeStyle: 'short'
+        }) + ' WITA';
+    }
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+
+// ════════════════════════════════════════════════════════════════
+//  SUARA NOTIFIKASI (Web Audio API — tanpa file eksternal)
+// ════════════════════════════════════════════════════════════════
+function playNotifSound() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
+
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.3);
+    } catch (e) {
+        // Browser mungkin belum izinkan AudioContext sebelum interaksi user — skip
+    }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+//  WEB NOTIFICATIONS API
+// ════════════════════════════════════════════════════════════════
+function requestNotifPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+}
+
+function showBrowserNotif(phone, message, convId, isNewConv) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+    const title  = isNewConv
+        ? '🆕 Percakapan Baru - SISKA'
+        : '💬 Pesan Baru - SISKA';
+    const body   = `${phone}: ${message}`;
+    const icon   = '/static/favicon.ico';   // ganti sesuai path favicon Anda
+
+    const notif = new Notification(title, {
+        body,
+        icon,
+        tag : `conv-${convId}`,   // mencegah duplikat notifikasi untuk conv sama
+        renotify: true,
+    });
+
+    notif.onclick = function () {
+        window.focus();
+        window.location.href = `/admin/conversation/${convId}`;
+        notif.close();
+    };
+
+    // Auto-tutup setelah 6 detik
+    setTimeout(() => notif.close(), 6000);
+}
+
+
+// ════════════════════════════════════════════════════════════════
+//  TOAST IN-PAGE
+// ════════════════════════════════════════════════════════════════
+let unreadNotifCount = 0;
+
+function showToast(phone, message, convId, isNewConv) {
+    const container = document.getElementById('toast-container');
+    const toast     = document.createElement('div');
+    const cls       = isNewConv ? 'siska-toast new-conv' : 'siska-toast';
+
+    toast.className = cls;
+    toast.innerHTML = `
+        <span class="toast-icon">${isNewConv ? '🆕' : '💬'}</span>
+        <div class="toast-body">
+            <div class="toast-title">${isNewConv ? 'Percakapan Baru' : 'Pesan Baru Masuk'}</div>
+            <div class="toast-phone">📱 ${phone}</div>
+            <div class="toast-msg">${message}</div>
+        </div>
+        <span class="toast-close" title="Tutup">✕</span>
+    `;
+
+    // Klik toast → buka percakapan
+    toast.addEventListener('click', function (e) {
+        if (!e.target.classList.contains('toast-close')) {
+            window.location.href = `/admin/conversation/${convId}`;
+        }
+    });
+
+    // Tutup toast
+    toast.querySelector('.toast-close').addEventListener('click', function (e) {
+        e.stopPropagation();
+        fadeOutToast(toast);
+    });
+
+    container.prepend(toast);
+
+    // Auto-tutup setelah 8 detik
+    setTimeout(() => fadeOutToast(toast), 8000);
+
+    // Update badge jumlah notif
+    unreadNotifCount++;
+    const badge = document.getElementById('notif-badge');
+    badge.textContent = unreadNotifCount;
+    badge.style.display = 'inline-block';
+    badge.style.animation = 'none';
+    void badge.offsetWidth;             // reflow paksa restart animasi
+    badge.style.animation = 'bounce 0.4s ease';
+
+    // Reset badge saat user klik di mana saja di halaman
+    document.addEventListener('click', resetBadge, { once: true });
+}
+
+function fadeOutToast(toast) {
+    if (!toast.parentElement) return;
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(60px)';
+    setTimeout(() => toast.remove(), 300);
+}
+
+function resetBadge() {
+    unreadNotifCount = 0;
+    const badge = document.getElementById('notif-badge');
+    badge.style.display = 'none';
+}
+
+
+// ════════════════════════════════════════════════════════════════
+//  UPDATE TABEL PERCAKAPAN (tanpa full reload)
+// ════════════════════════════════════════════════════════════════
+function refreshConversations() {
+    // Sembunyikan banner
+    document.getElementById('new-msg-banner').style.display = 'none';
+
+    // Reload halaman untuk memuat ulang tabel dari server
+    window.location.reload();
+}
+
+function highlightConvRow(convId) {
+    const row = document.querySelector(`tr[data-conv-id="${convId}"]`);
+    if (row) {
+        row.classList.add('row-highlight', 'table-warning', 'fw-semibold', 'unread-row');
+        // Tambah/update badge unread pada baris
+        const phoneCell = row.querySelector('td:first-child');
+        let badge = phoneCell.querySelector('.unread-badge');
+        if (badge) {
+            badge.textContent = parseInt(badge.textContent || '0') + 1;
+        } else {
+            const newBadge = document.createElement('span');
+            newBadge.className = 'badge bg-danger rounded-pill ms-1 unread-badge';
+            newBadge.textContent = '1';
+            phoneCell.appendChild(newBadge);
+        }
+    } else {
+        // Baris belum ada di tabel (percakapan baru) → tampilkan banner
+        document.getElementById('new-msg-banner').style.display = 'block';
+    }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+//  SSE — Server-Sent Events Client
+// ════════════════════════════════════════════════════════════════
+const dot   = document.getElementById('sse-dot');
+const label = document.getElementById('sse-label');
+
+let sseSource        = null;
+let sseReconnectMs   = 3000;    // mulai 3 detik, naik maksimal 30 detik
+const MAX_RECONNECT  = 30000;
+
+function setSseStatus(state) {
+    dot.className = state;
+    switch (state) {
+        case 'connected'   : label.textContent = 'Live'; break;
+        case 'connecting'  : label.textContent = 'Menghubungkan...'; break;
+        case 'disconnected': label.textContent = 'Terputus'; break;
+    }
+}
+
+function connectSSE() {
+    if (sseSource) {
+        sseSource.close();
+        sseSource = null;
+    }
+
+    setSseStatus('connecting');
+    sseSource = new EventSource('/admin/stream');
+
+    sseSource.onopen = function () {
+        console.log('✅ SSE terhubung ke /admin/stream');
+        setSseStatus('connected');
+        sseReconnectMs = 3000;  // reset backoff
+        requestNotifPermission();
+    };
+
+    sseSource.onmessage = function (e) {
+        // Abaikan komentar keepalive (tidak masuk ke sini)
+        let data;
+        try {
+            data = JSON.parse(e.data);
+        } catch (_) {
+            return;
+        }
+
+        if (data.type === 'connected') {
+            console.log('🔗 SSE handshake OK');
+            return;
+        }
+
+        if (data.type === 'new_message') {
+            const { phone, message, conversation_id, is_new_conv } = data;
+            console.log(`📨 Pesan baru dari ${phone} (conv ${conversation_id})`);
+
+            // 1. Suara notifikasi
+            playNotifSound();
+
+            // 2. Toast in-page
+            showToast(phone, message, conversation_id, is_new_conv);
+
+            // 3. Browser notification (saat tab tidak aktif)
+            showBrowserNotif(phone, message, conversation_id, is_new_conv);
+
+            // 4. Highlight baris di tabel / tampilkan banner
+            highlightConvRow(conversation_id);
+        }
+    };
+
+    sseSource.onerror = function () {
+        console.warn(`⚠️ SSE error — reconnect dalam ${sseReconnectMs / 1000}s`);
+        setSseStatus('disconnected');
+        sseSource.close();
+        sseSource = null;
+
+        // Exponential backoff reconnect
+        setTimeout(connectSSE, sseReconnectMs);
+        sseReconnectMs = Math.min(sseReconnectMs * 1.5, MAX_RECONNECT);
+    };
+}
+
+// Mulai koneksi SSE saat halaman terbuka
+connectSSE();
+
+// Reconnect saat tab kembali aktif (misal setelah suspend laptop)
+document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && !sseSource) {
+        console.log('🔄 Tab aktif kembali — reconnect SSE');
+        connectSSE();
+    }
+});
+
+// Pastikan SSE ditutup saat halaman ditutup
+window.addEventListener('beforeunload', function () {
+    if (sseSource) sseSource.close();
+});
+
+
+// ════════════════════════════════════════════════════════════════
+//  AUTO-REFRESH FALLBACK setiap 3 menit (jaga-jaga SSE mati)
+// ════════════════════════════════════════════════════════════════
+setTimeout(() => window.location.reload(), 180000);
+</script>
+</body>
+</html>

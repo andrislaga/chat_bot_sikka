@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log Percakapan Agen - SISKA BPS Sikka</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root { --bps-blue: #003366; }
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', sans-serif; }
+        .navbar { background: linear-gradient(90deg, var(--bps-blue), #005599); }
+        .nav-pills .nav-link { color: #555; border-radius: 8px; font-size: 0.875rem; padding: 6px 14px; }
+        .nav-pills .nav-link.active { background-color: var(--bps-blue); color: white; }
+        .nav-pills .nav-link:hover:not(.active) { background-color: #e8eef5; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.07); }
+        .card-header { background: white; border-bottom: 2px solid #f0f2f5; font-weight: 600; color: var(--bps-blue); border-radius: 12px 12px 0 0 !important; padding: 14px 20px; }
+
+        .msg-preview {
+            font-size: 0.85rem;
+            border-left: 3px solid #dee2e6;
+            padding-left: 10px;
+        }
+        .table th { font-size: 0.78rem; text-transform: uppercase; color: #6c757d; letter-spacing: 0.5px; }
+        .table td { vertical-align: middle; }
+        .badge-status {
+            font-size: 0.7rem;
+            padding: 4px 8px;
+            border-radius: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark mb-4 py-2">
+    <div class="container">
+        <a class="navbar-brand fw-bold" href="/admin">📊 SISKA Admin</a>
+        <a href="/logout" class="btn btn-sm btn-outline-light">Keluar</a>
+    </div>
+</nav>
+
+<div class="container mb-4">
+    <ul class="nav nav-pills gap-1">
+        <li class="nav-item"><a href="/admin"               class="nav-link">🏠 Antrean Agen</a></li>
+        <li class="nav-item"><a href="/admin/services"     class="nav-link">⚙️ Kelola Layanan</a></li>
+        <li class="nav-item"><a href="/admin/publications" class="nav-link">📚 Kelola Publikasi</a></li>
+        <li class="nav-item"><a href="/admin/logs"         class="nav-link active">💬 Log Percakapan</a></li>
+    </ul>
+</div>
+
+<div class="container mb-5">
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="get" action="/admin/logs" class="row g-2 align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label small text-muted mb-1">🔍 Cari Nomor HP</label>
+                    <input
+                        type="text"
+                        name="search"
+                        class="form-control form-control-sm"
+                        placeholder="Contoh: 62812..."
+                        value="{{ search_val }}"
+                    >
+                </div>
+                <div class="col-md-4 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary btn-sm flex-fill">Filter</button>
+                    <a href="/admin/logs" class="btn btn-outline-secondary btn-sm flex-fill">Reset</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>📋 Riwayat Percakapan Agen
+                {% if search_val %}
+                    <span class="badge bg-warning text-dark ms-2">Filter: {{ search_val }}</span>
+                {% endif %}
+            </span>
+            <button class="btn btn-sm btn-outline-primary" onclick="window.location.reload()">🔄 Refresh</button>
+        </div>
+
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:15%">Nomor HP</th>
+                            <th style="width:12%">Status</th>
+                            <th style="width:35%">Pesan Terakhir</th>
+                            <th style="width:15%">Waktu</th>
+                            <th style="width:10%">Total</th>
+                            <th style="width:13%" class="text-center">Aksi</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if summaries %}
+                            {% for s in summaries %}
+                            <tr>
+                                <td>
+                                    <strong>{{ s.phone }}</strong>
+                                    {% if s.status == 'pending' %}
+                                        <span class="badge bg-warning text-dark ms-1">!</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if s.status == 'pending' %}
+                                        <span class="badge bg-warning text-dark">⏳ Menunggu</span>
+                                    {% elif s.status == 'in_progress' %}
+                                        <span class="badge bg-info text-dark">🔄 Proses</span>
+                                    {% elif s.status == 'responded' %}
+                                        <span class="badge bg-success">✅ Direspon</span>
+                                    {% elif s.status == 'closed' %}
+                                        <span class="badge bg-secondary">🔒 Selesai</span>
+                                    {% else %}
+                                        <span class="badge bg-light text-dark">{{ s.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="msg-preview">
+                                        <div class="text-truncate">
+                                            <span class="text-primary fw-semibold">👤:</span> 
+                                            {{ s.last_user_message | truncate(40) or '—' }}
+                                        </div>
+                                        {% if s.last_admin_reply %}
+                                        <div class="text-truncate">
+                                            <span class="text-success fw-semibold">🧑‍💼:</span> 
+                                            {{ s.last_admin_reply | truncate(40) }}
+                                        </div>
+                                        {% else %}
+                                        <div class="text-muted fst-italic small">Belum ada balasan</div>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td><small>{{ s.last_update | wita }}</small></td>
+                                <td><span class="badge bg-light text-dark">{{ s.message_count }} pesan</span></td>
+                                <td class="text-center">
+                                    <a href="/admin/conversation/{{ s.conversation_id }}" 
+                                       class="btn btn-sm btn-outline-primary">
+                                        💬 Lihat Detail
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center py-5 text-muted">
+                                    <span style="font-size:2rem;">📭</span><br>
+                                    <strong>Tidak ada riwayat percakapan.</strong>
+                                </td>
+                            </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {% if summaries %}
+        <div class="card-footer bg-white text-muted small py-2 px-3">
+            Menampilkan {{ summaries | length }} percakapan.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

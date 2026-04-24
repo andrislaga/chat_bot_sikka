@@ -1,0 +1,71 @@
+### --- PYTHON --- ###
+venv/
+env/
+.venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+### --- ENV & SENSITIVE DATA --- ###
+.env
+.env.*
+!.env.example
+
+### --- DATABASE --- ###
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+*.mysql
+
+### --- LOGS (PENTING UNTUK VPS) --- ###
+logs/
+*.log
+siska_error.log
+gunicorn-error.log
+gunicorn-out.log
+scheduler-error.log
+
+### --- BACKUP FILE --- ###
+backups/
+*.bak
+*.backup
+
+### --- IDE --- ###
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+### --- SYSTEM FILES --- ###
+Thumbs.db
+desktop.ini
+
+### --- CACHE & TEST --- ###
+.pytest_cache/
+.coverage
+htmlcov/
+
+### --- LOCK FILE (SCHEDULER / PROCESS) --- ###
+*.lock
+siska_scheduler.lock
+
+### --- NODE / FRONTEND (kalau nanti ada dashboard JS) --- ###
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+### --- DEPLOYMENT / VPS TEMP FILE --- ###
+*.pid
+*.seed
+*.tgz
+
+### --- OPTIONAL: UPLOADS (kalau ada fitur file user) --- ###
+uploads/
+media/
