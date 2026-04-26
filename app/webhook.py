@@ -635,50 +635,62 @@ async def receive_message(request: Request):
                 return _build_response("success", mc, is_postman)
 
             # STATE: PUBLIKASI LIST
-            elif menu_state == "publikasi_list":
-                # Ambil halaman saat ini dari session
-                session_data_raw = current_session.get("last_intent", "{}")
-                try:
-                    session_data = json.loads(session_data_raw)
-                    current_page = session_data.get("page", 1)
-                except:
-                    current_page = 1
-
-                # Ambil data publikasi dari cache (sudah berupa list)
-                pubs_list = db_service.get_publications_cache()
-                if pubs_list is None:
-                    # Cache expired/kosong → refresh dari API
-                    pubs_list = db_service.get_or_refresh_publications(bps_api.fetch_all_publications)
-
-                if not pubs_list:
-                    mc.send_text("📚 Maaf, data publikasi tidak tersedia saat ini. Silakan coba lagi nanti.")
-                    db_service.delete_session(sender)
-                    return _build_response("success", mc, is_postman)
-
-                # Navigasi halaman
-                if payload_id:
-                    if payload_id.startswith("page_next_"):
-                        new_page = int(payload_id.replace("page_next_", ""))
-                        _show_publications_page(sender, new_page, mc, user_id, pubs_list)
-                    elif payload_id.startswith("page_prev_"):
-                        new_page = int(payload_id.replace("page_prev_", ""))
-                        _show_publications_page(sender, new_page, mc, user_id, pubs_list)
-                    return _build_response("success", mc, is_postman)
-
-                # User mengetik angka
-                # User mengetik angka
-                if user_text.strip().isdigit():
-                    global_idx = int(user_text.strip()) - 1   # ← angka sudah global, cukup -1
-                    if 0 <= global_idx < len(pubs_list):
-                        _show_publication_detail(pubs_list[global_idx], mc)
-                        db_service.delete_session(sender)
-                    else:
-                        mc.send_text(f"⚠️ Pilihan tidak valid. Masukkan angka 1–{len(pubs_list)}.")
-                    return _build_response("success", mc, is_postman)
-
-                # Input tidak dikenali
-                mc.send_text("⚠️ Silakan pilih angka atau gunakan tombol navigasi.")
+        elif menu_state == "publikasi_list":
+            # 1. Izinkan keluar kapan saja
+            if user_text_lower in ("menu", "batal", "kembali", "exit", "keluar", "0"):
+                db_service.delete_session(sender)
+                _send_main_menu(mc)
                 return _build_response("success", mc, is_postman)
+
+            # Ambil halaman saat ini dari session
+            session_data_raw = current_session.get("last_intent", "{}")
+            try:
+                session_data = json.loads(session_data_raw)
+                current_page = session_data.get("page", 1)
+            except:
+                current_page = 1
+
+            # Ambil data publikasi dari cache
+            pubs_list = db_service.get_publications_cache()
+            if pubs_list is None:
+                pubs_list = db_service.get_or_refresh_publications(bps_api.fetch_all_publications)
+            if not pubs_list:
+                mc.send_text("📚 Maaf, data publikasi tidak tersedia saat ini. Silakan coba lagi nanti.")
+                db_service.delete_session(sender)
+                return _build_response("success", mc, is_postman)
+
+            # 2. Navigasi halaman dengan tombol
+            if payload_id:
+                if payload_id.startswith("page_next_"):
+                    new_page = int(payload_id.replace("page_next_", ""))
+                    _show_publications_page(sender, new_page, mc, user_id, pubs_list)
+                    return _build_response("success", mc, is_postman)
+                elif payload_id.startswith("page_prev_"):
+                    new_page = int(payload_id.replace("page_prev_", ""))
+                    _show_publications_page(sender, new_page, mc, user_id, pubs_list)
+                    return _build_response("success", mc, is_postman)
+
+            # 3. User mengetik angka
+            if user_text.strip().isdigit():
+                global_idx = int(user_text.strip()) - 1
+                if 0 <= global_idx < len(pubs_list):
+                    _show_publication_detail(pubs_list[global_idx], mc)
+                else:
+                    mc.send_text(f"⚠️ Pilihan tidak valid. Masukkan angka 1–{len(pubs_list)}.")
+                db_service.delete_session(sender)   # hapus session setelah selesai
+                return _build_response("success", mc, is_postman)
+
+            # 4. Teks terlalu panjang / tidak wajar → anggap tidak dikenal & tawarkan menu
+            if len(user_text.strip()) > 80:
+                mc.send_text(
+                    "⚠️ Maaf, saya hanya menerima angka atau tombol navigasi.\n"
+                    "Ketik *menu* untuk kembali ke menu utama."
+                )
+                return _build_response("success", mc, is_postman)
+
+            # 5. Input tidak dikenali
+            mc.send_text("⚠️ Silakan pilih angka atau gunakan tombol navigasi.")
+            return _build_response("success", mc, is_postman)
 
         # ── PRIORITAS 3: Intent detection ─────────────────────────
         intent = detector.get_intent(user_text, payload_id)
