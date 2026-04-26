@@ -3,6 +3,10 @@ scheduler.py - SISKA Bot Scheduler
 ===================================
 Windows (dev):  Simple PID lock
 Linux (prod):   fcntl.flock (uncomment saat deploy)
+
+Perubahan:
+  - close_idle_agent_conversations: timeout 15 menit → 3 menit, pesan lebih rapi
+  - [BARU] close_idle_bot_sessions: tutup sesi bot idle > 3 menit + kirim notifikasi WA
 """
 import os
 import time
@@ -24,6 +28,10 @@ log = get_logger(__name__)
 _LOCK_FILE_PATH = "/tmp/siska_scheduler.lock"  # Linux ✅
 
 _lock_file_handle = None
+
+# ── Konstanta timeout ──────────────────────────────────────────────────────────
+BOT_SESSION_TIMEOUT_MINUTES   = int(os.getenv("BOT_SESSION_TIMEOUT_MINUTES",   "3"))
+AGENT_SESSION_TIMEOUT_MINUTES = int(os.getenv("AGENT_SESSION_TIMEOUT_MINUTES", "3"))
 
 
 def _try_acquire_scheduler_lock() -> bool:
@@ -75,6 +83,10 @@ def _try_acquire_scheduler_lock() -> bool:
         return False
 
 
+# ════════════════════════════════════════════════════════════════
+#  JOB: Sinkronisasi Publikasi (00:00 WITA)
+# ════════════════════════════════════════════════════════════════
+
 def sync_publications():
     """Sinkronisasi publikasi BPS (00:00 WITA)."""
     log.info("[Scheduler] 📚 Sinkronisasi publikasi...")
@@ -90,6 +102,10 @@ def sync_publications():
     except Exception as e:
         log.error(f"[Scheduler] ❌ Error publikasi: {e}", exc_info=True)
 
+
+# ════════════════════════════════════════════════════════════════
+#  JOB: Sinkronisasi Variabel (01:00 WITA)
+# ════════════════════════════════════════════════════════════════
 
 def sync_all_variables_data():
     """Sinkronisasi data variabel statistik (01:00 WITA)."""
@@ -119,11 +135,70 @@ def sync_all_variables_data():
     log.info(f"[Scheduler] ✅ Variabel: cached={cached} skip={skipped} error={errors}")
 
 
+# ════════════════════════════════════════════════════════════════
+#  JOB: Auto-Tutup Sesi Bot Idle (setiap 1 menit)
+# ════════════════════════════════════════════════════════════════
+
+def close_idle_bot_sessions():
+    """
+    Tutup sesi percakapan bot (bukan agen) yang idle > BOT_SESSION_TIMEOUT_MINUTES.
+    Kirim pesan notifikasi ke user sebelum sesi dihapus.
+
+    PRASYARAT — kolom updated_at harus ada di chatbot_sessions (jalankan sekali):
+        ALTER TABLE chatbot_sessions
+            ADD COLUMN updated_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP
+                ON UPDATE CURRENT_TIMESTAMP;
+    """
+    db     = DatabaseService()
+    cutoff = datetime.utcnow() - timedelta(minutes=BOT_SESSION_TIMEOUT_MINUTES)
+
+    expired = db.fetch_all(
+        """SELECT phone, current_menu
+           FROM chatbot_sessions
+           WHERE updated_at < %s""",
+        (cutoff,)
+    )
+
+    if not expired:
+        return
+
+    log.info(f"[Scheduler] ⏱️ Menutup {len(expired)} sesi bot idle...")
+
+    for sess in expired:
+        phone      = sess["phone"]
+        menu_state = sess.get("current_menu", "")
+
+        # Lewati sesi kosong / tidak relevan
+        if not menu_state:
+            db.delete_session(phone)
+            continue
+
+        log.info(f"  🔒 Bot timeout: {phone} | state={menu_state}")
+
+        try:
+            send_whatsapp_message(
+                phone,
+                f"⏱️ *Percakapan diakhiri karena tidak ada balasan.*\n\n"
+                f"Ketik *menu* untuk memulai percakapan baru. 😊"
+            )
+        except Exception as e:
+            log.warning(f"  ⚠️ Gagal kirim pesan timeout ke {phone}: {e}")
+
+        db.delete_session(phone)
+
+
+# ════════════════════════════════════════════════════════════════
+#  JOB: Auto-Tutup Percakapan Agen Idle (setiap 1 menit)
+# ════════════════════════════════════════════════════════════════
+
 def close_idle_agent_conversations():
-    """Tutup percakapan agen idle > 15 menit."""
-    db = DatabaseService()
-    idle_minutes = 15
-    cutoff = datetime.utcnow() - timedelta(minutes=idle_minutes)
+    """
+    Tutup percakapan agen yang idle > AGENT_SESSION_TIMEOUT_MINUTES.
+    Kirim pesan notifikasi ke user sebelum ditutup.
+    """
+    db     = DatabaseService()
+    cutoff = datetime.utcnow() - timedelta(minutes=AGENT_SESSION_TIMEOUT_MINUTES)
 
     idle_convs = db.fetch_all(
         """SELECT conversation_id, phone 
@@ -133,22 +208,44 @@ def close_idle_agent_conversations():
            HAVING MAX(created_at) < %s""",
         (cutoff,)
     )
-    
+
     if not idle_convs:
         return
 
-    log.info(f"[Scheduler] Menutup {len(idle_convs)} percakapan idle...")
+    log.info(f"[Scheduler] ⏱️ Menutup {len(idle_convs)} percakapan agen idle...")
+
     for conv in idle_convs:
+        conv_id = conv["conversation_id"]
+        phone   = conv["phone"]
+
+        log.info(f"  🔒 Agent timeout: conv_id={conv_id} | phone={phone}")
+
         try:
-            db.close_conversation(conv["conversation_id"])
             send_whatsapp_message(
-                conv["phone"],
-                f"⏰ *Sesi bantuan berakhir* (tidak aktif {idle_minutes} menit).\n"
-                "Ketik *petugas* jika masih butuh bantuan. 😊"
+                phone,
+                f"⏱️ *Sesi bantuan petugas diakhiri karena tidak ada balasan.*\n\n"
+                f"Terima kasih Kak! 🙏 Ketik *menu* jika ada yang bisa kami bantu lagi. 😊"
             )
         except Exception as e:
-            log.error(f"[Scheduler] Error tutup conv {conv['conversation_id']}: {e}")
+            log.warning(f"  ⚠️ Gagal kirim pesan timeout agen ke {phone}: {e}")
 
+        db.close_conversation(conv_id)
+
+        # Catat sebagai pesan sistem di thread percakapan
+        try:
+            db.execute_query(
+                """INSERT INTO agent_requests
+                   (phone, message, status, conversation_id, is_admin_reply, is_read)
+                   VALUES (%s, %s, 'closed', %s, 1, 1)""",
+                (phone, "[Sistem] Sesi ditutup otomatis karena tidak ada balasan.", conv_id)
+            )
+        except Exception as e:
+            log.warning(f"  ⚠️ Gagal insert pesan sistem: {e}")
+
+
+# ════════════════════════════════════════════════════════════════
+#  JOB: Bersihkan Rate Limiter (setiap 5 menit)
+# ════════════════════════════════════════════════════════════════
 
 def cleanup_rate_limiter():
     """Bersihkan rate limiter setiap 5 menit."""
@@ -156,6 +253,10 @@ def cleanup_rate_limiter():
     if removed:
         log.debug(f"[Scheduler] Rate limiter cleanup: {removed} key")
 
+
+# ════════════════════════════════════════════════════════════════
+#  ENTRY POINT
+# ════════════════════════════════════════════════════════════════
 
 def start_scheduler():
     """
@@ -166,12 +267,22 @@ def start_scheduler():
         return None
 
     sched = BackgroundScheduler(timezone="Asia/Makassar")
-    
-    sched.add_job(sync_publications, CronTrigger(hour=0, minute=0), id="sync_pub")
-    sched.add_job(sync_all_variables_data, CronTrigger(hour=1, minute=0), id="sync_var")
-    sched.add_job(close_idle_agent_conversations, IntervalTrigger(minutes=5), id="close_idle")
+
+    # Sinkronisasi harian
+    sched.add_job(sync_publications,       CronTrigger(hour=0, minute=0),  id="sync_pub")
+    sched.add_job(sync_all_variables_data, CronTrigger(hour=1, minute=0),  id="sync_var")
+
+    # Timeout sesi — berjalan setiap 1 menit
+    sched.add_job(close_idle_bot_sessions,        IntervalTrigger(minutes=1), id="bot_session_timeout")
+    sched.add_job(close_idle_agent_conversations,  IntervalTrigger(minutes=1), id="agent_timeout")
+
+    # Maintenance
     sched.add_job(cleanup_rate_limiter, IntervalTrigger(minutes=5), id="cleanup_rl")
-    
+
     sched.start()
-    log.info(f"✅ Scheduler aktif | {len(sched.get_jobs())} jobs | PID {os.getpid()}")
+    log.info(
+        f"✅ Scheduler aktif | {len(sched.get_jobs())} jobs | PID {os.getpid()} | "
+        f"bot_timeout={BOT_SESSION_TIMEOUT_MINUTES}m | "
+        f"agent_timeout={AGENT_SESSION_TIMEOUT_MINUTES}m"
+    )
     return sched

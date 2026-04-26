@@ -108,7 +108,7 @@ def _get_user_id(phone: str) -> int:
     return user["id"] if user else 0
 
 def _send_main_menu(mc: MessageCollector):
-    mc.send_text("Halo Kak! 👋 Saya *SISKA*, asisten virtual resmi *BPS Kabupaten Sikka*. 😊")
+    mc.send_text("Halo Kak! 👋 Saya *SISKA*, asisten virtual *BPS Kabupaten Sikka*. 😊")
     menu_options = [
         {"id": "menu_1", "title": "📊 Data Statistik",  "desc": "Inflasi, Penduduk, IPM, dll"},
         {"id": "menu_2", "title": "📚 Unduh Publikasi",  "desc": "Buku & Laporan BPS"},
@@ -141,11 +141,10 @@ def handle_layanan(sender: str, user_text: str, payload_id: Optional[str], mc: M
         )
         if row:
             reply = (
-                f"ℹ️ *{row['name']}*\n"
+                f"*{row['name']}*\n"
                 f"{'─' * 28}\n"
                 f"{row['content']}\n\n"
-                f"📂 Kategori: _{row.get('category', 'Umum')}_\n\n"
-                f"Ketik *layanan* untuk info lain atau *menu* untuk kembali. 😊"
+                f"Ketik *layanan* untuk info lain atau *menu* untuk kembali."
             )
         else:
             reply = "Maaf Kak, informasi layanan tersebut tidak ditemukan. 🙏\nKetik *layanan* untuk melihat daftar."
@@ -215,7 +214,6 @@ def handle_statistik_start(sender: str, user_id: int, mc: MessageCollector):
 
 def handle_publikasi(sender: str, user_text: str, payload_id: Optional[str],
                      mc: MessageCollector, user_id: int):
-    # Ambil data publikasi dengan cache 48 jam
     pubs_list = db_service.get_or_refresh_publications(bps_api.fetch_all_publications)
     if not pubs_list:
         mc.send_text("📚 Maaf, data publikasi tidak tersedia saat ini. Silakan coba lagi nanti.")
@@ -230,7 +228,6 @@ def _show_publications_page(sender: str, page: int, mc: MessageCollector, user_i
     total_pubs = len(pubs_list)
     total_pages = max(1, (total_pubs + limit - 1) // limit)
     
-    # Menghitung offset untuk mengambil potongan list (slicing)
     offset = (page - 1) * limit
     pubs_page = pubs_list[offset:offset+limit]
 
@@ -243,10 +240,8 @@ def _show_publications_page(sender: str, page: int, mc: MessageCollector, user_i
     for i, p in enumerate(pubs_page, 1):
         title = p.get('title', 'No Title')
         year = p.get('year', '-')
-        # Menggunakan offset + i agar nomor urut (1, 11, 21, dst) sinkron dengan halaman
         lines.append(f"{offset + i}. *{title}* ({year})")
 
-    # Menyesuaikan instruksi balasan sesuai dengan nomor urut yang tampil
     start_num = offset + 1
     end_num = offset + len(pubs_page)
     lines.append(f"\n_Balas angka {start_num}–{end_num} untuk detail publikasi._")
@@ -254,12 +249,8 @@ def _show_publications_page(sender: str, page: int, mc: MessageCollector, user_i
     if total_pages > 1:
         lines.append("_Atau gunakan tombol navigasi di bawah._")
 
-    # Simpan seluruh daftar publikasi di session agar tidak perlu fetch ulang saat navigasi
-    session_data = json.dumps({
-        "page": page,
-        "total_pages": total_pages,
-        "pubs": pubs_list
-    })
+    # ✅ Hanya simpan halaman, bukan seluruh daftar
+    session_data = json.dumps({"page": page})
     db_service.update_session(sender, user_id, "publikasi_list", session_data)
 
     buttons = []
@@ -645,15 +636,26 @@ async def receive_message(request: Request):
 
             # STATE: PUBLIKASI LIST
             elif menu_state == "publikasi_list":
+                # Ambil halaman saat ini dari session
                 session_data_raw = current_session.get("last_intent", "{}")
                 try:
                     session_data = json.loads(session_data_raw)
-                    pubs_list = session_data.get("pubs", [])
                     current_page = session_data.get("page", 1)
-                except Exception:
-                    pubs_list = []
+                except:
                     current_page = 1
 
+                # Ambil data publikasi dari cache (sudah berupa list)
+                pubs_list = db_service.get_publications_cache()
+                if pubs_list is None:
+                    # Cache expired/kosong → refresh dari API
+                    pubs_list = db_service.get_or_refresh_publications(bps_api.fetch_all_publications)
+
+                if not pubs_list:
+                    mc.send_text("📚 Maaf, data publikasi tidak tersedia saat ini. Silakan coba lagi nanti.")
+                    db_service.delete_session(sender)
+                    return _build_response("success", mc, is_postman)
+
+                # Navigasi halaman
                 if payload_id:
                     if payload_id.startswith("page_next_"):
                         new_page = int(payload_id.replace("page_next_", ""))
@@ -663,18 +665,19 @@ async def receive_message(request: Request):
                         _show_publications_page(sender, new_page, mc, user_id, pubs_list)
                     return _build_response("success", mc, is_postman)
 
+                # User mengetik angka
+                # User mengetik angka
                 if user_text.strip().isdigit():
-                    idx = int(user_text.strip()) - 1
-                    offset = (current_page - 1) * 10
-                    global_idx = offset + idx
+                    global_idx = int(user_text.strip()) - 1   # ← angka sudah global, cukup -1
                     if 0 <= global_idx < len(pubs_list):
                         _show_publication_detail(pubs_list[global_idx], mc)
                         db_service.delete_session(sender)
                     else:
-                        mc.send_text(f"⚠️ Pilihan tidak valid.")
+                        mc.send_text(f"⚠️ Pilihan tidak valid. Masukkan angka 1–{len(pubs_list)}.")
                     return _build_response("success", mc, is_postman)
 
-                mc.send_text("⚠️ Silakan pilih angka atau tombol navigasi.")
+                # Input tidak dikenali
+                mc.send_text("⚠️ Silakan pilih angka atau gunakan tombol navigasi.")
                 return _build_response("success", mc, is_postman)
 
         # ── PRIORITAS 3: Intent detection ─────────────────────────
