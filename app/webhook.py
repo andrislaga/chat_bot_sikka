@@ -1,14 +1,16 @@
 """
 webhook.py — FastAPI Router untuk WhatsApp Webhook SISKA
 =========================================================
-Perubahan v1.2 (Notifikasi Real-Time):
-  - Import notification_manager
-  - Broadcast SSE event saat pesan user masuk ke antrian agen
-  - Broadcast saat percakapan agen baru dimulai
-  - Semua perubahan ADDITIVE — tidak ada logika lama yang diubah
+Perubahan v1.3 (Bug Fixes):
+  FIX-1: Deduplication berdasarkan message.id → cegah spam dari webhook duplikat WA
+  FIX-2: Hapus "4" dari AGEN_TRIGGER_MESSAGES → tidak konflik dengan nomor publikasi
+  FIX-3: Konsistensi cache publikasi → gunakan satu sumber data yang sama
+  FIX-4: payload_id="menu_4" eksplisit di-route ke agen → tidak bergantung intent model
+  FIX-5: menu_state="" init + else clause untuk stale session (dari v1.2)
 """
 
 import os
+import time
 from fastapi import APIRouter, Request, Query
 from fastapi.responses import PlainTextResponse
 from typing import List, Dict, Any, Optional
@@ -29,8 +31,6 @@ from app.services.intent_detection import IntentDetection
 from app.services.database_service import DatabaseService
 from app.services.bps_api import BpsApi
 from app.services.logger import Logger
-
-# ── BARU: import notification_manager untuk SSE real-time ──
 from app.services.notification_manager import notification_manager
 
 router = APIRouter()
@@ -38,6 +38,32 @@ detector = IntentDetection()
 db_service = DatabaseService()
 bps_api = BpsApi()
 chat_logger = Logger()
+
+
+# ════════════════════════════════════════════════════════════════
+#  FIX-1: DEDUPLICATION — cegah webhook duplikat dari WhatsApp
+# ════════════════════════════════════════════════════════════════
+# WhatsApp Cloud API kadang mengirim webhook yang sama beberapa kali
+# (retry mechanism). Tanpa deduplication, satu pesan diproses 2-3× →
+# menyebabkan agen terbuka/tertutup berulang dan respon ganda.
+
+_processed_wamid: Dict[str, float] = {}  # {message_id: timestamp}
+_DEDUP_TTL = 60  # detik — cukup untuk absorb semua retry WA
+
+
+def _is_duplicate_message(wamid: str) -> bool:
+    """Return True jika message_id ini sudah diproses dalam 60 detik terakhir."""
+    now = time.time()
+    # Bersihkan entri expired agar tidak memory leak
+    expired = [k for k, v in _processed_wamid.items() if now - v > _DEDUP_TTL]
+    for k in expired:
+        del _processed_wamid[k]
+
+    if wamid in _processed_wamid:
+        return True  # duplikat!
+
+    _processed_wamid[wamid] = now
+    return False
 
 
 # ════════════════════════════════════════════════════════════════
@@ -206,8 +232,6 @@ def handle_statistik_start(sender: str, user_id: int, mc: MessageCollector):
         )
 
 
-
-
 # ════════════════════════════════════════════════════════════════
 #  HANDLER: PUBLIKASI
 # ════════════════════════════════════════════════════════════════
@@ -221,22 +245,20 @@ def handle_publikasi(sender: str, user_text: str, payload_id: Optional[str],
     _show_publications_page(sender, 1, mc, user_id, pubs_list)
 
 
-import json
-
 def _show_publications_page(sender: str, page: int, mc: MessageCollector, user_id: int, pubs_list: list):
     limit = 10
     total_pubs = len(pubs_list)
     total_pages = max(1, (total_pubs + limit - 1) // limit)
-    
+
     offset = (page - 1) * limit
-    pubs_page = pubs_list[offset:offset+limit]
+    pubs_page = pubs_list[offset:offset + limit]
 
     if not pubs_page:
         mc.send_text("📚 Tidak ada publikasi ditemukan.")
         return
 
     lines = [f"📚 *Daftar Publikasi BPS Sikka* (Hal {page}/{total_pages})\n"]
-    
+
     for i, p in enumerate(pubs_page, 1):
         title = p.get('title', 'No Title')
         year = p.get('year', '-')
@@ -245,11 +267,11 @@ def _show_publications_page(sender: str, page: int, mc: MessageCollector, user_i
     start_num = offset + 1
     end_num = offset + len(pubs_page)
     lines.append(f"\n_Balas angka {start_num}–{end_num} untuk detail publikasi._")
-    
+
     if total_pages > 1:
         lines.append("_Atau gunakan tombol navigasi di bawah._")
 
-    # ✅ Hanya simpan halaman, bukan seluruh daftar
+    # Simpan hanya halaman saat ini
     session_data = json.dumps({"page": page})
     db_service.update_session(sender, user_id, "publikasi_list", session_data)
 
@@ -286,7 +308,10 @@ def _show_publication_detail(pub: dict, mc: MessageCollector):
 #  HANDLER: AGEN (Live Chat Interaktif)
 # ════════════════════════════════════════════════════════════════
 
-AGEN_TRIGGER_MESSAGES = {"4", "petugas", "admin", "agen", "operator", "bantuan manusia", "hubungi petugas"}
+# FIX-2: Hapus "4" dari trigger set — "4" ambigu karena juga nomor item publikasi.
+# Agen hanya dipicu oleh kata kunci teks ATAU payload_id="menu_4" (ditangani di PRIORITAS 3).
+AGEN_TRIGGER_MESSAGES = {"petugas", "admin", "agen", "operator", "bantuan manusia", "hubungi petugas"}
+
 
 def handle_agen_start(sender: str, user_text: str, user_id: int, mc: MessageCollector):
     active_conv = db_service.get_active_conversation(sender)
@@ -345,6 +370,12 @@ async def receive_message(request: Request):
                 msg_obj = value["messages"][0]
                 sender = msg_obj["from"]
 
+                # ── FIX-1: Cek duplikat berdasarkan message ID ────
+                wamid = msg_obj.get("id", "")
+                if wamid and _is_duplicate_message(wamid):
+                    print(f"  ♻️ Duplikat WA message {wamid} dari {sender} — diabaikan.")
+                    return {"status": "ignored", "reason": "duplicate_message"}
+
                 # Rate limit per phone
                 phone_ok, retry_after = webhook_limiter.is_allowed(
                     f"phone:{sender}", PHONE_MAX_REQUESTS, PHONE_WINDOW_SECONDS
@@ -386,9 +417,9 @@ async def receive_message(request: Request):
             )
             if not phone_ok:
                 return {"status": "rate_limited", "retry_after": retry_after}
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print(f"🧪 POSTMAN TEST | sender={sender} | text='{user_text}' | payload={payload_id}")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
         else:
             return {"status": "ignored", "reason": "unknown_format"}
 
@@ -435,7 +466,6 @@ async def receive_message(request: Request):
             )
             chat_logger.log_chat(sender, user_text, "agen", "Pesan diteruskan ke petugas.")
 
-            # ── NOTIFIKASI REAL-TIME: pesan baru di percakapan aktif ──
             await notification_manager.broadcast({
                 "type"           : "new_message",
                 "phone"          : sender,
@@ -448,7 +478,8 @@ async def receive_message(request: Request):
 
         # ── PRIORITAS 2: State machine ────────────────────────────
         current_session = db_service.get_session(sender)
-        menu_state = ""
+        menu_state = ""  # FIX-5: inisialisasi defensif sebelum blok if
+
         if user_text_lower in ("menu", "batal", "kembali", "exit", "keluar", "0"):
             db_service.delete_session(sender)
             _send_main_menu(mc)
@@ -510,7 +541,6 @@ async def receive_message(request: Request):
                         data, _ = bps_api.get_aggregated_yearly_data(var_id)
                         return data
 
-                    # ✅ Ambil data SEKALI dan SIMPAN ke variable
                     cached_data = db_service.get_or_refresh_variable(var_id, fetch_yearly_data)
 
                     if not cached_data:
@@ -520,9 +550,7 @@ async def receive_message(request: Request):
                         db_service.delete_session(sender)
                         return _build_response("success", mc, is_postman)
 
-                    # ✅ Ekstrak tahun dari cached_data (tanpa panggil fungsi terpisah)
                     available_years = sorted(set(str(d.get('tahun', '')) for d in cached_data if d.get('tahun')))
-                    
                     nama_var = var_info['nama_var'] if var_info else "Variabel"
 
                     if not available_years:
@@ -533,11 +561,10 @@ async def receive_message(request: Request):
                         db_service.delete_session(sender)
                         return _build_response("success", mc, is_postman)
 
-                    # ✅ Simpan cached_data ke session untuk penggunaan selanjutnya (opsional)
                     db_service.update_session(sender, user_id, "tanya_tahun", json.dumps({
                         "var_id": var_id,
                         "nama_var": nama_var,
-                        "cached_data": cached_data  # Simpan agar tidak ambil lagi
+                        "cached_data": cached_data
                     }))
 
                     if len(available_years) <= 6:
@@ -565,7 +592,6 @@ async def receive_message(request: Request):
 
             # STATE: TANYA TAHUN
             elif menu_state == "tanya_tahun":
-                # ✅ Ambil data dari session (tidak panggil API lagi)
                 session_data_raw = current_session.get("last_intent", "{}")
                 try:
                     session_data = json.loads(session_data_raw)
@@ -573,16 +599,16 @@ async def receive_message(request: Request):
                     nama_var = session_data.get("nama_var", "Data Statistik")
                     cached_data = session_data.get("cached_data", [])
                 except Exception:
-                    # Fallback: ambil dari database/cache
                     var_id = current_session.get("last_intent", "")
                     if not var_id:
                         mc.send_text("⚠️ Sesi tidak valid, silakan mulai dari *statistik*.")
                         db_service.delete_session(sender)
                         return _build_response("success", mc, is_postman)
-                    
+
                     def fetch(var_id):
                         data, _ = bps_api.get_aggregated_yearly_data(var_id)
                         return data
+
                     cached_data = db_service.get_or_refresh_variable(var_id, fetch)
                     var_info = db_service.get_variable_info(var_id)
                     nama_var = var_info['nama_var'] if var_info else "Data Statistik"
@@ -602,7 +628,6 @@ async def receive_message(request: Request):
                     return _build_response("ignored", mc, is_postman)
 
                 unit = cached_data[0].get('unit', '') if cached_data else ''
-
                 db_service.delete_session(sender)
 
                 if cached_data:
@@ -636,7 +661,7 @@ async def receive_message(request: Request):
 
             # STATE: PUBLIKASI LIST
             elif menu_state == "publikasi_list":
-                # 1. Izinkan keluar kapan saja
+                # Izinkan keluar kapan saja
                 if user_text_lower in ("menu", "batal", "kembali", "exit", "keluar", "0"):
                     db_service.delete_session(sender)
                     _send_main_menu(mc)
@@ -647,19 +672,19 @@ async def receive_message(request: Request):
                 try:
                     session_data = json.loads(session_data_raw)
                     current_page = session_data.get("page", 1)
-                except:
+                except Exception:
                     current_page = 1
 
-                # Ambil data publikasi dari cache
-                pubs_list = db_service.get_publications_cache()
-                if pubs_list is None:
-                    pubs_list = db_service.get_or_refresh_publications(bps_api.fetch_all_publications)
+                # FIX-3: Selalu gunakan get_or_refresh_publications agar data konsisten
+                # dengan yang ditampilkan saat daftar pertama kali muncul.
+                # Hindari get_publications_cache() yang bisa mengembalikan urutan berbeda.
+                pubs_list = db_service.get_or_refresh_publications(bps_api.fetch_all_publications)
                 if not pubs_list:
                     mc.send_text("📚 Maaf, data publikasi tidak tersedia saat ini. Silakan coba lagi nanti.")
                     db_service.delete_session(sender)
                     return _build_response("success", mc, is_postman)
 
-                # 2. Navigasi halaman dengan tombol
+                # Navigasi halaman dengan tombol
                 if payload_id:
                     if payload_id.startswith("page_next_"):
                         new_page = int(payload_id.replace("page_next_", ""))
@@ -670,17 +695,17 @@ async def receive_message(request: Request):
                         _show_publications_page(sender, new_page, mc, user_id, pubs_list)
                         return _build_response("success", mc, is_postman)
 
-                # 3. User mengetik angka
+                # User mengetik angka (nomor global sesuai tampilan)
                 if user_text.strip().isdigit():
                     global_idx = int(user_text.strip()) - 1
                     if 0 <= global_idx < len(pubs_list):
                         _show_publication_detail(pubs_list[global_idx], mc)
                     else:
                         mc.send_text(f"⚠️ Pilihan tidak valid. Masukkan angka 1–{len(pubs_list)}.")
-                    db_service.delete_session(sender)   # hapus session setelah selesai
+                    db_service.delete_session(sender)
                     return _build_response("success", mc, is_postman)
 
-                # 4. Teks terlalu panjang / tidak wajar → anggap tidak dikenal & tawarkan menu
+                # Teks terlalu panjang / tidak wajar
                 if len(user_text.strip()) > 80:
                     mc.send_text(
                         "⚠️ Maaf, saya hanya menerima angka atau tombol navigasi.\n"
@@ -688,21 +713,25 @@ async def receive_message(request: Request):
                     )
                     return _build_response("success", mc, is_postman)
 
-                # 5. Input tidak dikenali
+                # Input tidak dikenali
                 mc.send_text("⚠️ Silakan pilih angka atau gunakan tombol navigasi.")
                 return _build_response("success", mc, is_postman)
 
-
             else:
-                # ← BARU: state tidak dikenal/stale → bersihkan, lanjut ke intent detection
+                # FIX-5: State tidak dikenal / stale session → bersihkan, lanjut ke intent detection
                 print(f"  ⚠️ Stale/unknown session state='{menu_state}' — session dihapus, lanjut ke intent.")
                 db_service.delete_session(sender)
                 # (tidak return — fall-through ke PRIORITAS 3 secara eksplisit & aman)
 
-
-
         # ── PRIORITAS 3: Intent detection ─────────────────────────
         intent = detector.get_intent(user_text, payload_id)
+
+        # FIX-4: payload_id="menu_4" selalu route ke agen, tidak bergantung pada
+        # intent model. Ini memastikan tombol "Hubungi Petugas" selalu berfungsi
+        # bahkan jika model tidak mendeteksi intent "agen" dari payload tersebut.
+        if payload_id == "menu_4":
+            intent = "agen"
+
         if intent == "greeting" or user_text_lower in ("menu", "halo", "mulai", "start"):
             _send_main_menu(mc)
         elif intent == "statistik":
@@ -712,10 +741,8 @@ async def receive_message(request: Request):
         elif intent == "layanan":
             handle_layanan(sender, user_text, payload_id, mc)
         elif intent == "agen":
-            # Jalankan handler agen
             handle_agen_start(sender, user_text, user_id, mc)
 
-            # ── NOTIFIKASI REAL-TIME: percakapan agen baru dimulai ──
             new_conv = db_service.get_active_conversation(sender)
             if new_conv:
                 await notification_manager.broadcast({
