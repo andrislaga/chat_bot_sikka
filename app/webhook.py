@@ -15,6 +15,7 @@ from fastapi import APIRouter, Request, Query
 from fastapi.responses import PlainTextResponse
 from typing import List, Dict, Any, Optional
 import json
+from app.services.gemini_service import gemini_service
 
 from app.middleware.rate_limiter import (
     webhook_limiter,
@@ -99,10 +100,11 @@ class MessageCollector:
         self.log = []
 
     def send_text(self, text: str):
-        print(f"  📤 TEXT → {self.sender}: {text[:80]}...")
-        self.log.append({"type": "TEXT", "content": text})
+        polished = gemini_service.beautify(text)
+        print(f"  📤 TEXT → {self.sender}: {polished[:80]}...")
+        self.log.append({"type": "TEXT", "content": polished})
         if not self.is_postman:
-            send_whatsapp_message(self.sender, text)
+            send_whatsapp_message(self.sender, polished)
 
     def send_list(self, body: str, button: str, header: str, options: List[Dict]):
         print(f"  📋 LIST → {self.sender}: [{header}] {len(options)} opsi")
